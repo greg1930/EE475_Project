@@ -141,12 +141,11 @@ def read(platform, tle_file=None, line1=None, line2=None):
    """
     return Tle(platform, tle_file=tle_file, line1=line1, line2=line2)
 
-
-def fetch(destination):
+def fetch(destination,urls):
     """fetch TLE from internet and save it to *destination*.
    """
     with open(destination, "w") as dest:
-        for url in TLE_URLS:
+        for url in urls:
             response = urlopen(url)
             dest.write(response.read())
 

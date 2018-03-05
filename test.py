@@ -11,21 +11,22 @@ from pyorbital import tlefile
 import time
 import threading
 from threading import Timer
-from twisted.test.test_pb import Observable
+from Queue import Queue
 import sched
 import time
 import operator
-from libxml2mod import doc
+
 from datetime import timedelta
 
 
 class TLE:
 
-    def __init__(self,path,satName):
+    def __init__(self,path,satName,duration):
         self.lat = 55.8667
         self.lon = -4.4333
         self.alt = 125
         self.satName = satName
+        self.duration = duration
         f = open("%s" % path,'r')
         sat = f.readline()
         line1 = f.readline()
@@ -49,21 +50,23 @@ class TLE:
         
     def nextPass(self):
         now = datetime.utcnow()
-        nextPass = self.orb.get_next_passes(now,12,self.lon,self.lat,self.alt,0.001,0)
+        nextPass = self.orb.get_next_passes(now,self.duration,self.lon,self.lat,self.alt,0.001,0)
         return nextPass[0]
     
     def nextPasses(self):
         now = datetime.utcnow()
-        nextPass = self.orb.get_next_passes(now,12,self.lon,self.lat,self.alt,0.001,0)
+        nextPass = self.orb.get_next_passes(now,self.duration,self.lon,self.lat,self.alt,0.001,0)
         return nextPass
     
 
     
 class Antenna(threading.Thread):
-    def __init__(self,threadID,value):
+    def __init__(self,threadID,q):
         super(Antenna, self).__init__()
+        """
         self.portA='/dev/ttyUSB0'
         self.portE='/dev/ttyUSB1'
+        """
         self.baud=9600
         self.parity='N'
         self.databits=8
@@ -72,7 +75,9 @@ class Antenna(threading.Thread):
         self.timeout='None'
         self.xonxoff=0
         self.threadID=threadID
-        self.value=value
+        self.queue = q
+      
+        """
         self.serA=serial.Serial(port=self.portA, baudrate=self.baud, parity=self.parity, 
                       bytesize=self.databits, stopbits=self.stopbits, 
                       rtscts=self.rtscts, timeout=0.5,
@@ -81,15 +86,19 @@ class Antenna(threading.Thread):
                       bytesize=self.databits, stopbits=self.stopbits, 
                       rtscts=self.rtscts, timeout=0.5,
                       xonxoff=self.xonxoff)
+        """
         
-    def run(self):
-        if self.value!=None:
-            if self.threadID=='Azimuth':
-                self.updateAzimuth(self.value)
-            elif self.threadID=='Elevation':
-                self.updateElevation(self.value)        
-            
-        
+    def run(self): #https://stackoverflow.com/questions/13481276/threading-in-python-using-queue
+        while True:
+            value = self.queue.get()
+            if value == None:
+                break
+            else:
+                if self.threadID=='Azimuth':
+                    self.updateAzimuth(value)
+                elif self.threadID=='Elevation':
+                    self.updateElevation(value)        
+    
     def updateAzimuth(self,azi):
         """
         ser=serial.Serial(port=self.portA, baudrate=self.baud, parity=self.parity, 
@@ -102,10 +111,14 @@ class Antenna(threading.Thread):
             azi=0
         if azi>348:
             azi=348.0
+        print('azi')
+        print(azi)
         azi=''.join(['A',str(azi)])
         #self.serA.write(b'%s\r' % azi)
         #ser.close()
         #ser.write("L,1\r" )
+        
+            
         
     def updateElevation(self,ele):
         """
@@ -117,10 +130,13 @@ class Antenna(threading.Thread):
         #time.sleep(3)
         if ele<0.1 and ele>-0.1:
             ele=0
+        print('ele')
+        print(ele)
         ele=''.join(['E',str(ele)])
         #self.serE.write(b'%s\r' % ele)
         #ser1.close()
-        
+      
+      
         
         
         
@@ -204,18 +220,19 @@ class scheduledSat(Passover):
         
 class Tracker: 
     
-    def __init__(self,tolerance):
+    def __init__(self,tolerance,duration):
         self.tolerance = tolerance
+        self.duration = duration
         
     def schedule(self,satelliteList):
         passovers=[]
         self.scheduleList = []
         for name,priority in satelliteList.iteritems(): #loop through all the tles we want to track
-            path = '/home/stacstation/eclipse-workspace/%s.txt'%(name)
+            path = '/Users/gregstewart96/stacstation/eclipse-workspace/%s.txt'%(name)
             f = open("%s" % path,'r')
             satName = f.readline()
             satName = satName.split(' ',1)[0]
-            tle=TLE(path,satName) #create tle instance
+            tle=TLE(path,satName,self.duration) #create tle instance
             allPasses = tle.nextPasses() #get an array for the new passover start and end
             for passes in allPasses:
                 passover = Passover(tle,passes[0],passes[1],satName,priority)
@@ -224,7 +241,10 @@ class Tracker:
         #print(self.clashCount)   
         #passovers=sorted(passovers,key=operator.itemgetter(2)) #sort by the second element (time) as it's a list of lists
         passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
+        
         passovers = self.longestPhase(passovers)
+        passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
+        
         for item in passovers:
             
             print(item.getSatName())
@@ -234,9 +254,14 @@ class Tracker:
             print(item.getTLE().getAzimuth(item.getStartTime()))
             print(item.getTLE().getAzimuth(item.getEndTime()))
             print
-        passovers = self.clashDetect(passovers)
-        passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
-        passovers = self.clashDetect(passovers)
+        
+        
+        for i in range(0,3):
+            passovers,clashCount = self.clashDetect(passovers)
+            passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
+            if clashCount==0: break
+        
+        
         """assert clashCount==0"""
         for item in passovers:
             
@@ -247,6 +272,7 @@ class Tracker:
             print(item.getTLE().getAzimuth(item.getStartTime()))
             print(item.getTLE().getAzimuth(item.getEndTime()))
             print
+        
         
         
         """
@@ -274,7 +300,6 @@ class Tracker:
         """
         return passovers
     
-
     
     def longestPhase(self,passovers):
         for passes in passovers:
@@ -292,6 +317,25 @@ class Tracker:
                 passes.setStartTime(azi0+timedelta(seconds=1))
         return passovers
     
+    def longestPhase2(self,passovers):
+        for passes in passovers:
+            passoverStart = passes.getStartTime()
+            passoverEnd = passes.getEndTime()
+            tle = passes.getTLE()
+            name = passes.getSatName()
+            priority = passes.getPriority()
+            azi0=self.azimuthZero(passoverStart, passoverEnd,tle)
+            phase1=time.mktime(azi0.timetuple())-(time.mktime(passoverStart.timetuple()))
+            phase2=time.mktime(passoverEnd.timetuple())-(time.mktime(azi0.timetuple())+1)
+            if phase1>0 and phase2>0:
+                passes.setEndTime(azi0)
+                passovers.append(Passover(tle,azi0+timedelta(seconds=1),passoverEnd,name,priority))
+            elif phase1>0:
+                passes.setEndTime(azi0)
+            elif phase2>0: 
+                passes.setStartTime(azi0+timedelta(seconds=1))
+        return passovers
+    
     def compare(self,passover,clashChecked,clashCount):
         startTime = passover.getStartTime()
         endTime = passover.getEndTime()
@@ -304,46 +348,77 @@ class Tracker:
                 case_four_transfer_time = self.calculateTime(tle.getAzimuth(endTime), item.getTLE().getAzimuth(item.getStartTime()), tle.getElevation(endTime), item.getTLE().getElevation(item.getStartTime()))
                 if startTime>item.getStartTime() and (item.getEndTime()+timedelta(seconds=case_one_transfer_time))>startTime and item.getEndTime()<endTime:
                     clashCount+=1
-                    
-                    print('case 1', case_one_transfer_time)
+                    """
+                    print('case 1')
+                    print(startTime)
+                    print(item.getStartTime())
+                    """
                     if priority<item.getPriority():
                         time = startTime
                         while time>item.getStartTime():
                             transferTime = self.calculateTime(item.getTLE().getAzimuth(time), tle.getAzimuth(startTime), item.getTLE().getElevation(time), tle.getElevation(startTime))
-                            if (time+timedelta(seconds=transferTime)) < startTime: break
+                            if (time+timedelta(seconds=transferTime)) < startTime: 
+                                if time==startTime:
+                                    clashChecked.remove(item)
+                                else:
+                                    item.setEndTime(time)
+                            break
                             time = time - timedelta(seconds=1)
-                        item.setEndTime(time)
+        
                     elif priority>item.getPriority():
-                        startTime = item.getEndTime()                        
+                        if item.getEndTime() + timedelta(seconds=case_one_transfer_time)<endTime:
+                            startTime = item.getEndTime()+timedelta(seconds=case_one_transfer_time)+timedelta(seconds=1)
+                        else:
+                            return clashChecked,clashCount
                     else:
                         optimise = self.optimisePassover(item, passover, 0)
                         item.setEndTime(optimise[0])
-                        startTime = optimise[1]
+                        startTime = optimise[1]   
+                        
                         
                         
     
                 elif startTime>item.getStartTime() and item.getEndTime()>startTime and item.getEndTime()>endTime:
                     clashCount+=1
+                    """
+                    print('case 2')
+                    print(startTime)
+                    print(item.getStartTime())
+                    """
                     if priority<item.getPriority():
                         time=startTime
                         while time>item.getStartTime():
                             transferTime = self.calculateTime(item.getTLE().getAzimuth(time), tle.getAzimuth(startTime), item.getTLE().getElevation(time), tle.getElevation(startTime))
                             if (time+timedelta(seconds=transferTime)) < startTime: break
-                            time = time - timedelta(seconds=1)
-                            clashChecked.append(Passover(item.getTLE(),endTime,item.getEndTime(),item.getSatName(),item.getPriority()))
+                            time -= timedelta(seconds=1)
+                        time2 = item.getEndTime()
+                        while time2>endTime:
+                            transferTime = self.calculateTime(item.getTLE().getAzimuth(time2),tle.getAzimuth(endTime),item.getTLE().getElevation(time2),tle.getElevation(endTime))
+                            if time2 - timedelta(seconds=transferTime) < endTime:
+                                time2 += timedelta(seconds=1)
+                                clashChecked.append(Passover(item.getTLE(),time2,item.getEndTime(),item.getSatName(),item.getPriority()))
+                                break
                         item.setEndTime(time)
+                        
                     elif priority>item.getPriority():
                         return clashChecked,clashCount
+                    
                     else:
                         time = item.getEndTime()
                         while time>endTime:
                             transferTime = self.calculateTime(item.getTLE().getAzimuth(time), tle.getAzimuth(endTime), item.getTLE().getElevation(time), tle.getElevation(endTime))
                             if (time-timedelta(seconds=transferTime))<endTime:
-                                endPhase = (item.getEndTime()-(time+timedelta(seconds=1))).total_seconds()
+                                if time == item.getEndTime():
+                                    endPhase = 0
+                                else:
+                                    endPhase = (item.getEndTime()-(time+timedelta(seconds=1))).total_seconds()
                                 break
                             time=time-timedelta(seconds=1)
                         optimise = self.optimisePassover(item, passover, endPhase)
-                        clashChecked.append(Passover(item.getTLE(),endTime,item.getEndTime(),item.getSatName(),item.getPriority()))
+                        if optimise[0] == item.getStartTime():
+                            return clashChecked,clashCount
+                        if endPhase>0:
+                            clashChecked.append(Passover(item.getTLE(),endTime,item.getEndTime(),item.getSatName(),item.getPriority()))
                         item.setEndTime(optimise[0])
                         startTime = optimise[1]
                         
@@ -352,43 +427,75 @@ class Tracker:
                         
                 elif startTime<item.getStartTime() and endTime>item.getStartTime() and endTime>item.getEndTime():
                     clashCount+=1
+                    """
+                    print('case 3')
+                    print(startTime)
+                    print(item.getStartTime())
+                    """
                     if priority<item.getPriority():
                         clashChecked.remove(item)
+                        
                     elif priority>item.getPriority():
                         time = item.getStartTime()
                         while time>startTime:
                             transferTime = self.calculateTime(tle.getAzimuth(time),item.getTLE().getAzimuth(item.getStartTime()),tle.getElevation(time),item.getTLE().getElevation(item.getStartTime()))
                             if (time + timedelta(seconds=transferTime))<item.getStartTime(): break
                             time = time - timedelta(seconds=1)
-                        clashChecked.append(Passover(tle,item.getEndTime(),endTime,satName,priority))
+                        time2 = endTime
+                        while time>item.getEndTime():
+                            transferTime = self.calculateTime(tle.getAzimuth(time2), item.getTLE().getAzimuth(item.getEndTime()), tle.getElevation(time2), item.getTLE().getElevation(item.getEndTime()))
+                            if time2-timedelta(seconds=transferTime) < item.getEndTime():
+                                time2 += timedelta(seconds=1) 
+                                clashChecked.append(Passover(tle,time2,endTime,satName,priority))
+                                break
+                            time2 -= timedelta(seconds=1)
                         endTime = time
+                        
                     else:
-    
                         time = endTime
                         while time>item.getEndTime():
                             transferTime = self.calculateTime(tle.getAzimuth(time), item.getTLE().getAzimuth(item.getEndTime()), tle.getElevation(time), item.getTLE().getElevation(item.getEndTime()))
-                            if (time-timedelta(seconds=transferTime))<item.getEndTime(): 
-                                endPhase = (endTime-(time+timedelta(seconds=1))).total_seconds()
+                            if (time-timedelta(seconds=transferTime))<item.getEndTime():
+                                if time==endTime:
+                                    endPhase = 0
+                                else:
+                                    endPhase = (endTime-(time+timedelta(seconds=1))).total_seconds()
                                 break
                             time=time-timedelta(seconds=1)
                         optimise = self.optimisePassover(passover, item, endPhase)
-                        clashChecked.append(Passover(tle,item.getEndTime(),endTime,satName,priority))
+                        if optimise[0] == startTime:
+                            return clashChecked,clashCount
+                        if endPhase>0:
+                            clashChecked.append(Passover(tle,item.getEndTime(),endTime,satName,priority))
                         endTime = optimise[0]
                         item.setStartTime(optimise[1])
+                        
                         
                     
                 elif startTime<item.getStartTime() and (endTime+timedelta(seconds=case_four_transfer_time))>item.getStartTime() and endTime<item.getEndTime():
                     clashCount+=1
-                    print(endTime+timedelta(seconds=case_four_transfer_time))
+                    """
+                    print('case 4')
+                    print(startTime)
+                    print(item.getStartTime())
+                    """
                     if priority<item.getPriority():
-                        item.setStartTime(endTime)
+                        if endTime + timedelta(seconds=case_four_transfer_time)<item.getEndTime():
+                            item.setStartTime(endTime + timedelta(seconds=case_four_transfer_time) + timedelta(seconds=1))
+                        else:
+                            clashChecked.remove(item)
                     elif priority>item.getPriority():
-                        time = item.getStartTime()
+                        time = item.getStartTime() 
                         while time>startTime:
                             transferTime = self.calculateTime(tle.getAzimuth(time),item.getTLE().getAzimuth(item.getStartTime()),tle.getElevation(time),item.getTLE().getElevation(item.getStartTime()))
-                            if (time + timedelta(seconds=transferTime))<item.getStartTime(): break
-                            time = time - timedelta(seconds=1)
-                        endTime = time
+                            if (time + timedelta(seconds=transferTime))<item.getStartTime(): 
+                                if time==item.getStartTime():
+                                    return clashChecked,clashCount
+                                else:
+                                    endTime = time
+                                break
+                            time -= timedelta(seconds=1)
+                      
                     else:
                         optimise = self.optimisePassover(passover, item, 0)
                         endTime = optimise[0]
@@ -402,42 +509,121 @@ class Tracker:
         clashCount = 0
         for passover in passovers:
             clashChecked,clashCount = self.compare(passover,clashChecked,clashCount)
+            
+            percentage = float(len(clashChecked))/float(len(passovers))
+            percentage*=100
+            #print('%f %% complete'%(percentage))
         print(clashCount)
-        return clashChecked
+        return clashChecked,clashCount
+        
     
     def optimisePassover(self,firstSatellite,secondSatellite,additionalTime):
-        print('optimise')
+        #print('optimise')
         currentTime = firstSatellite.getStartTime()
         optimalTime = None
-        firstSatEndTime = None
-        secondSatStartTime = None
+        firstSatEndTime = firstSatellite.getEndTime()
+        secondSatStartTime = secondSatellite.getStartTime()
+
         while currentTime<firstSatellite.getEndTime():
-            offset = 0
-            delta = None
-            while delta>1:
-                transferTime = self.calculateTime(firstSatellite.getTLE().getAzimuth(currentTime),secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=offset)),firstSatellite.getTLE().getElevation(currentTime),secondSatellite.getTLE().getElevation(currentTime+timedelta(seconds=offset)))
-                if secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=transferTime))>secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=offset)):
-                    delta = secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=transferTime)) - secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=offset))
+            
+            aziDelta = 0
+            eleDelta = 0
+            aziOffset = 0
+            eleOffset = 0
+            i = 0
+     
+            while True:
+                
+                aziTime = self.calculateOneTime(firstSatellite.getTLE().getAzimuth(currentTime),secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziDelta)))
+               
+                nextOffset = (secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziTime))) - (secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziDelta)))
+              
+                if (aziOffset>0 and nextOffset>aziOffset) or (aziOffset<0 and nextOffset<aziOffset):
+                    break
+                
+                elif aziOffset<0 and nextOffset>0:
+                    if nextOffset-360<aziOffset:
+                        break
+                    else:
+                        aziOffset = nextOffset - 360
+                
+                elif aziOffset>0 and nextOffset<0:
+                    if nextOffset+360>aziOffset:
+                        break
+                    else:
+                        aziOffset = nextOffset + 360
+                
                 else:
-                    delta = secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=offset)) - secondSatellite.getTLE().getAzimuth(currentTimetimedelta(seconds=offset))
-                offset+=1
-            if currentTime + timedelta(seconds=transferTime) >= secondSatellite.getStartTime():
+                    aziOffset = nextOffset
+                  
+        
+                aziDelta += self.calculateOneTime(0, abs(aziOffset)) #in seconds
+             
+                i+=1
+                
+                if aziOffset < self.tolerance and aziOffset >(self.tolerance*-1):
+                    break
+                if i>200:
+                    print('sleep')
+                    time.sleep(1000)
+                    time_to_start = self.calculateOneTimeTime(firstSatellite.getTLE().getAzimuth(currentTime),secondSatellite.getTLE().getAzimuth(secondSatellite.getStartTime()))
+                    time_to_end = self.calculateOneTime(firstSatellite.getTLE().getAzimuth(currentTime),secondSatellite.getTLE().getAzimuth(secondSatellite.getEndTime()))
+                    aziTime = max(time_to_start,time_to_end)
+                    break
+            i=0
+            
+            while True:
+                eleTime = self.calculateOneTime(firstSatellite.getTLE().getElevation(currentTime),secondSatellite.getTLE().getElevation(currentTime+timedelta(seconds=eleDelta)))
+                
+                nextOffset = (secondSatellite.getTLE().getElevation(currentTime+timedelta(seconds=eleTime))) - (secondSatellite.getTLE().getElevation(currentTime+timedelta(seconds=eleDelta)))
+                
+                if (eleOffset>0 and nextOffset>eleOffset) or (eleOffset<0 and nextOffset<eleOffset):
+                    break
+                
+                elif eleOffset<0 and nextOffset>0:
+                    if nextOffset-360<eleOffset:
+                        break
+                    else:
+                        eleOffset = nextOffset - 360
+                
+                elif eleOffset>0 and eleOffset<0:
+                    if nextOffset+360>eleOffset:
+                        break
+                    else:
+                        eleOffset = nextOffset + 360
+                
+                else:
+                    eleOffset = nextOffset
+              
+                
+                eleDelta += self.calculateOneTime(0, abs(eleOffset)) #in seconds
+                
+                i+=1
+                
+                if eleOffset < self.tolerance and eleOffset >(self.tolerance*-1):
+                    break
+                if i>200:
+                    print('sleep')
+                    time.sleep(1000)
+                    time_to_start = self.calculateOneTime(firstSatellite.getTLE().getElevation(currentTime),secondSatellite.getTLE().getElevation(secondSatellite.getStartTime()))
+                    time_to_end = self.calculateOneTime(firstSatellite.getTLE().getElevation(currentTime),secondSatellite.getTLE().getElevation(secondSatellite.getEndTime()))
+                    eleTime = max(time_to_start,time_to_end)
+                    break
+        
+            transferTime = max(aziTime,eleTime)
+            if currentTime + timedelta(seconds=transferTime) >= secondSatellite.getStartTime() and currentTime + timedelta(seconds=transferTime)<=secondSatellite.getEndTime():
                 firstSatPassover = (currentTime - firstSatellite.getStartTime()).total_seconds() + additionalTime
                 secondSatPassover = currentTime+timedelta(seconds=transferTime)
                 secondSatPassover = (secondSatellite.getEndTime()-secondSatPassover).total_seconds()
-    
-                if firstSatPassover>secondSatPassover:
-                    timeDifference = firstSatPassover - secondSatPassover
-                else:
-                    timeDifference = secondSatPassover - firstSatPassover
+                timeDifference = max(firstSatPassover,secondSatPassover) - min(firstSatPassover,secondSatPassover)
                 if timeDifference<optimalTime or optimalTime==None:
                     optimalTime=timeDifference
                     firstSatEndTime = currentTime
                     secondSatStartTime = currentTime + timedelta(seconds=transferTime)
-                    finalTranfer = transferTime
+                    error = self.calculateOneTime(0,self.tolerance)
+                    secondSatStartTime += timedelta(seconds=error)
         
             currentTime = currentTime + timedelta(seconds=1)
-        print(finalTranfer)
         return [firstSatEndTime,secondSatStartTime]
     
     def calculateTime(self,aziStart,aziEnd,eleStart,eleEnd):
@@ -466,13 +652,22 @@ class Tracker:
             return aziTime
         else:
             return eleTime
+        
+    def calculateOneTime(self,start,end):
+        delta = abs(end-start)
+        if delta<29:
+            time = delta/1.32
+        else:
+            time = ((delta-30)/2.1)+19
+        return time
+            
 
     def azimuthZero(self,starttime,endtime,tle):
         times = starttime
         while True:
-            if (tle.getAzimuth(times))<348 and tle.getAzimuth((times+timedelta(seconds=1)))>348:
+            if (tle.getAzimuth(times))<1 and tle.getAzimuth((times+timedelta(seconds=1)))>359:
                 return times
-            elif tle.getAzimuth(times)>348 and tle.getAzimuth((times+timedelta(seconds=1)))<348:
+            elif tle.getAzimuth(times)>359 and tle.getAzimuth((times+timedelta(seconds=1)))<1:
                 return times
             elif time.mktime(times.timetuple())>time.mktime(endtime.timetuple()):
                 return endtime
@@ -485,43 +680,60 @@ class Tracker:
     
     def positionAntenna(self,starttime,tle):
         print('position')
-        azimuth=tle.getAzimuth(starttime)
-        aziGetter = Antenna("Azimuth",azimuth)
-        aziGetter.start()
-        elevation=tle.getElevation(starttime)
-        ele = Antenna("Elevation",elevation)
+        aziQ = Queue()
+        aziQ.put(tle.getAzimuth(starttime))
+        azi = Antenna("Azimuth",aziQ)
+        azi.start()
+        aziQ.put(None)
+        eleQ = Queue()
+        eleQ.put(tle.getElevation(starttime))
+        ele = Antenna("Elevation",eleQ)
         ele.start()  
+        eleQ.put(None)
+        azi.join()
+        ele.join()
         print('position finished')
           
     def trackSatellite2(self,endtime,tle):
         print('track start')
-        azi = Antenna("Azimuth", None)
+        aziQ = Queue()
+        eleQ = Queue()
+        azi = Antenna("Azimuth", aziQ)
         azi.start()
-        ele = Antenna("Elevation",None)
+        ele = Antenna("Elevation",eleQ)
         ele.start()
         azimuth=tle.getAzimuth(datetime.utcnow())
         elevation=tle.getElevation(datetime.utcnow())
-        while time.time()<endtime:
+        while time.time()<time.mktime(endtime.timetuple()):
             if tle.getAzimuth(datetime.utcnow())>azimuth+self.tolerance:
                 azimuth=tle.getAzimuth(datetime.utcnow())+self.tolerance
-                azi.join()
-                azi = Antenna("Azimuth", azimuth)
-                azi.start()
+                if azimuth>tle.getAzimuth(endtime):
+                    azimuth = tle.getAzimuth(endtime)
+                aziQ.queue.clear()
+                aziQ.put(azimuth)
             elif tle.getAzimuth(datetime.utcnow())<azimuth-self.tolerance:
                 azimuth=tle.getAzimuth(datetime.utcnow())-self.tolerance
-                azi.join()
-                azi = Antenna("Azimuth", azimuth)
-                azi.start()
+                if azimuth<tle.getAzimuth(endtime):
+                    azimuth = tle.getAzimuth(endtime)
+                aziQ.queue.clear()
+                aziQ.put(azimuth)
             if tle.getElevation(datetime.utcnow())>elevation+self.tolerance:
                 elevation=tle.getElevation(datetime.utcnow())+self.tolerance
-                ele.join()
-                ele = Antenna("Elevation",elevation)
-                ele.start()
+                if elevation > 90:
+                    elevation = 90
+                eleQ.queue.clear()
+                eleQ.put(elevation)
             elif tle.getElevation(datetime.utcnow())<elevation-self.tolerance:
                 elevation=tle.getElevation(datetime.utcnow())-self.tolerance
-                ele.join()
-                ele = Antenna("Elevation",elevation)
-                ele.start()
+                if elevation < 0:
+                    elevation = 0
+                eleQ.queue.clear()
+                eleQ.put(elevation)
+                
+        aziQ.put(None)
+        eleQ.put(None)
+        azi.join()
+        ele.join()
         print('tracking ends')
                 
     def trackSatellite(self,starttime,endtime,tle):
@@ -571,17 +783,28 @@ class runSchedule(threading.Thread):
                     self.isAOS=True
                     self.tracker.positionAntenna(self.aosTime,self.tle)
                     self.losTime = item.getEndTime()
-                    while self.continueExecutingFlag==True and time.time()<time.mktime(self.losTime.timetuple()):
+                    while self.continueExecutingFlag==True and time.time()<time.mktime(self.aosTime.timetuple()):
                         time.sleep(1)
+                    print('stopped sleeping')
+                    print('flag',self.continueExecutingFlag)
                     if self.continueExecutingFlag==False:
                         return
                     self.isAOS=False
-                    self.tracker.trackSatellite2(time.mktime(self.losTime.timetuple()),self.tle)
+                    self.tracker.trackSatellite2(self.losTime,self.tle)
                     print('moving on to the next satellite')
                                 
     
     def getCurrentSatName(self):
         return self.satelliteName
+    
+    def getTLE(self):
+        return self.tle
+    
+    def getAOS(self):
+        return self.aosTime
+    
+    def getLOS(self):
+        return self.losTime
     
     def getScheduleList(self):
         return self.scheduleList
@@ -597,10 +820,7 @@ class runSchedule(threading.Thread):
     
     def getIsAOS(self):
         return self.isAOS
-    
-    def getSchedulerInstance(self):
-        return self.s
-    
+  
     def getFlag(self):
         return self.continueExecutingFlag
     
@@ -612,24 +832,27 @@ class runSchedule(threading.Thread):
 
             
         
-class main:
+class TLEUpdate:
     
     
     
-   
-    tlefile.fetch('/home/stacstation/eclipse-workspace/tle.txt')
-    file = open('/home/stacstation/eclipse-workspace/tle.txt')
-    buffer = [] 
-    i=0
-    for line in file:
-        buffer.append(line)
-        i+=1
-        if i==3:
-            fileout = open('/home/stacstation/eclipse-workspace/%s.txt'%(buffer[0].strip()),"w")
-            for item in buffer:
-                fileout.write(item)
-            i=0
-            buffer=[]
+    def update(self,urls):
+            
+        tlefile.fetch('/Users/gregstewart96/stacstation/eclipse-workspace/tle.txt',urls)
+        file = open('/Users/gregstewart96/stacstation/eclipse-workspace/tle.txt')
+        buffer = [] 
+        i=0
+        for line in file:
+            buffer.append(line)
+            i+=1
+            if i==3:
+                fileout = open('/Users/gregstewart96/stacstation/eclipse-workspace/%s.txt'%(buffer[0].strip()),"w")
+                for item in buffer:
+                    fileout.write(item)
+                i=0
+                buffer=[]
+        
+    
     """
     sat1 = 'LQSAT'
     sat2 = 'UKUBE-1'
@@ -659,4 +882,6 @@ class main:
     
     
         
-Main = main()
+tle = TLEUpdate()
+tle.update(('http://celestrak.com/NORAD/elements/amateur.txt','http://celestrak.com/NORAD/elements/engineering.txt'))
+
