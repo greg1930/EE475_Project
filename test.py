@@ -20,42 +20,43 @@ from datetime import timedelta
 
 
 class TLE:
-
-    def __init__(self,path,satName,duration):
+    """class to create an instance of pyorbital's 'Orbital' class and provide helper methods to 
+       access the name,azimuth,elevation and passover periods for the satellite corresponding to
+       the TLE file passed in
+    """
+    def __init__(self,path,duration):
         self.lat = 55.8667
         self.lon = -4.4333
         self.alt = 125
-        self.satName = satName
         self.duration = duration
         f = open("%s" % path,'r')
         sat = f.readline()
         line1 = f.readline()
         line2 = f.readline()
         self.orb = orbital.Orbital(sat,path,line1,line2)
-    
-    def getSatName(self):
-        return self.satName
+        
   
     def getAzimuth(self,time):
+        """ returns element 0 of get_observer_look which contains the azimuth
+            The result will be dependent on the datetime object 'time'
+        """
         azi = self.orb.get_observer_look(time, self.lon, self.lat,self.alt)
         return azi[0]
         
     def getElevation(self,time):
+        """ returns element 1 of get_observer_look which contains the elevation
+            The result will be dependent on the datetime object 'time'
+        """
         ele = self.orb.get_observer_look(time, self.lon, self.lat,self.alt)
         return ele[1]
     
-    def getLongitude(self,time):
-        result = self.orb.get_lonlatalt(time)
-        return result
-        
-    def nextPass(self):
-        now = datetime.utcnow()
-        nextPass = self.orb.get_next_passes(now,self.duration,self.lon,self.lat,self.alt,0.001,0)
-        return nextPass[0]
-    
     def nextPasses(self):
+        """
+        returns a list of lists containing the start time, end time and max elevation of the periods
+        the satellite will be in line of site of the ground station.
+        """
         now = datetime.utcnow()
-        nextPass = self.orb.get_next_passes(now,self.duration,self.lon,self.lat,self.alt,0.001,0)
+        nextPass = self.orb.get_next_passes(now,self.duration,self.lon,self.lat,self.alt,-0.358,0.001)
         return nextPass
     
 
@@ -128,8 +129,10 @@ class Antenna(threading.Thread):
                           xonxoff=self.xonxoff)
         """
         #time.sleep(3)
-        if ele<0.1 and ele>-0.1:
+        if ele<0.1:
             ele=0
+        elif ele>90:
+            ele = 90
         print('ele')
         print(ele)
         ele=''.join(['E',str(ele)])
@@ -179,6 +182,9 @@ class AntennaReader(Antenna):
         """ser.close()"""
         
 class Passover:
+    """This method contains getter and setter function for each of the required characteristics
+       of a satellite passover
+    """
     def __init__(self,tle,startTime,endTime,satName,priority):
         self.tle = tle
         self.startTime = startTime
@@ -219,28 +225,34 @@ class scheduledSat(Passover):
     
         
 class Tracker: 
+    """ This class contains methods, to create passovers, sort passovers, detect and fix passover
+        clashes, calculate the antenna rotation time, position the antenna and track a satellite
+    """
     
     def __init__(self,tolerance,duration):
         self.tolerance = tolerance
         self.duration = duration
         
     def schedule(self,satelliteList):
-        passovers=[]
-        self.scheduleList = []
-        for name,priority in satelliteList.iteritems(): #loop through all the tles we want to track
-            path = '/Users/gregstewart96/stacstation/eclipse-workspace/%s.txt'%(name)
-            f = open("%s" % path,'r')
-            satName = f.readline()
-            satName = satName.split(' ',1)[0]
-            tle=TLE(path,satName,self.duration) #create tle instance
-            allPasses = tle.nextPasses() #get an array for the new passover start and end
-            for passes in allPasses:
-                passover = Passover(tle,passes[0],passes[1],satName,priority)
+        passovers=[] #list for holding Passover class instances
+        #loop through all the tles we want to track
+        for name,priority in satelliteList.iteritems(): 
+            #path to the relevant TLE file
+            path = '/Users/gregstewart96/stacstation/eclipse-workspace/%s.txt'%(name) 
+            f = open("%s" % path,'r') #open the TLE file
+            satName = f.readline() #read line 1
+            satName = satName.split(' ',1)[0]#get rid of whitespace in line 1
+            tle=TLE(path,self.duration) #create tle instance
+            #get a tuple containing passovers of the satellite
+            allPasses = tle.nextPasses() 
+            #loop through all the satellites passovers
+            for passes in allPasses: 
+                #create a Passover instance for each passover
+                passover = Passover(tle,passes[0],passes[1],satName,priority) 
+                #add Passover instance to the list.
                 passovers.append(passover)
-        
-        #print(self.clashCount)   
-        #passovers=sorted(passovers,key=operator.itemgetter(2)) #sort by the second element (time) as it's a list of lists
-        passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
+        #sort passover based on the start time
+        passovers = sorted(passovers, key=lambda passover: passover.getStartTime()) 
         
         passovers = self.longestPhase(passovers)
         passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
@@ -256,10 +268,12 @@ class Tracker:
             print
         
         
-        for i in range(0,3):
+        for i in range(0,5):
             passovers,clashCount = self.clashDetect(passovers)
             passovers = sorted(passovers, key=lambda passover: passover.getStartTime())
             if clashCount==0: break
+            
+        #return clashCount
         
         
         """assert clashCount==0"""
@@ -302,18 +316,28 @@ class Tracker:
     
     
     def longestPhase(self,passovers):
+        """ find the longest phase and adjust the passover accordingly.
+        """
+        # loop through each passover
         for passes in passovers:
             passoverStart = passes.getStartTime()
             passoverEnd = passes.getEndTime()
             tle = passes.getTLE()
+            #get azi0 point
             azi0=self.azimuthZero(passoverStart, passoverEnd,tle)
+            #get the size of phase1
             phase1=time.mktime(azi0.timetuple())-(time.mktime(passoverStart.timetuple()))
+            #get the size of phase2
             phase2=time.mktime(passoverEnd.timetuple())-(time.mktime(azi0.timetuple())+1)
+            #if phase 1 is longer
             if phase1>=phase2:
                 print('phase1 chosen. phase1 %.2f ........ phase2 %.2f' % (phase1,phase2))
+                #set end time to azi0.
                 passes.setEndTime(azi0)
+            #if phase 2 is longer
             elif phase2>phase1:
                 print('phase2')
+                #set start time to one second after azi0
                 passes.setStartTime(azi0+timedelta(seconds=1))
         return passovers
     
@@ -353,17 +377,17 @@ class Tracker:
                     print(startTime)
                     print(item.getStartTime())
                     """
+                    oldEndTime = item.getEndTime()
                     if priority<item.getPriority():
                         time = startTime
                         while time>item.getStartTime():
                             transferTime = self.calculateTime(item.getTLE().getAzimuth(time), tle.getAzimuth(startTime), item.getTLE().getElevation(time), tle.getElevation(startTime))
                             if (time+timedelta(seconds=transferTime)) < startTime: 
-                                if time==startTime:
-                                    clashChecked.remove(item)
-                                else:
-                                    item.setEndTime(time)
-                            break
+                                item.setEndTime(time)
+                                break
                             time = time - timedelta(seconds=1)
+                        if item.getEndTime()==oldEndTime:
+                            clashChecked.remove(item)
         
                     elif priority>item.getPriority():
                         if item.getEndTime() + timedelta(seconds=case_one_transfer_time)<endTime:
@@ -395,9 +419,11 @@ class Tracker:
                         while time2>endTime:
                             transferTime = self.calculateTime(item.getTLE().getAzimuth(time2),tle.getAzimuth(endTime),item.getTLE().getElevation(time2),tle.getElevation(endTime))
                             if time2 - timedelta(seconds=transferTime) < endTime:
+                                if time2==item.getEndTime(): break
                                 time2 += timedelta(seconds=1)
                                 clashChecked.append(Passover(item.getTLE(),time2,item.getEndTime(),item.getSatName(),item.getPriority()))
                                 break
+                            time2 -= timedelta(seconds=1)
                         item.setEndTime(time)
                         
                     elif priority>item.getPriority():
@@ -442,9 +468,10 @@ class Tracker:
                             if (time + timedelta(seconds=transferTime))<item.getStartTime(): break
                             time = time - timedelta(seconds=1)
                         time2 = endTime
-                        while time>item.getEndTime():
+                        while time2>item.getEndTime():
                             transferTime = self.calculateTime(tle.getAzimuth(time2), item.getTLE().getAzimuth(item.getEndTime()), tle.getElevation(time2), item.getTLE().getElevation(item.getEndTime()))
                             if time2-timedelta(seconds=transferTime) < item.getEndTime():
+                                if time2==endTime: break
                                 time2 += timedelta(seconds=1) 
                                 clashChecked.append(Passover(tle,time2,endTime,satName,priority))
                                 break
@@ -474,27 +501,27 @@ class Tracker:
                     
                 elif startTime<item.getStartTime() and (endTime+timedelta(seconds=case_four_transfer_time))>item.getStartTime() and endTime<item.getEndTime():
                     clashCount+=1
-                    """
+                    
                     print('case 4')
                     print(startTime)
                     print(item.getStartTime())
-                    """
+                    
                     if priority<item.getPriority():
                         if endTime + timedelta(seconds=case_four_transfer_time)<item.getEndTime():
                             item.setStartTime(endTime + timedelta(seconds=case_four_transfer_time) + timedelta(seconds=1))
                         else:
                             clashChecked.remove(item)
                     elif priority>item.getPriority():
+                        oldEndTime = endTime
                         time = item.getStartTime() 
                         while time>startTime:
                             transferTime = self.calculateTime(tle.getAzimuth(time),item.getTLE().getAzimuth(item.getStartTime()),tle.getElevation(time),item.getTLE().getElevation(item.getStartTime()))
                             if (time + timedelta(seconds=transferTime))<item.getStartTime(): 
-                                if time==item.getStartTime():
-                                    return clashChecked,clashCount
-                                else:
-                                    endTime = time
+                                endTime = time
                                 break
                             time -= timedelta(seconds=1)
+                        if endTime == oldEndTime:
+                            return clashChecked,clashCount
                       
                     else:
                         optimise = self.optimisePassover(passover, item, 0)
@@ -533,14 +560,10 @@ class Tracker:
             i = 0
      
             while True:
-                
                 aziTime = self.calculateOneTime(firstSatellite.getTLE().getAzimuth(currentTime),secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziDelta)))
-               
                 nextOffset = (secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziTime))) - (secondSatellite.getTLE().getAzimuth(currentTime+timedelta(seconds=aziDelta)))
-              
                 if (aziOffset>0 and nextOffset>aziOffset) or (aziOffset<0 and nextOffset<aziOffset):
                     break
-                
                 elif aziOffset<0 and nextOffset>0:
                     if nextOffset-360<aziOffset:
                         break
@@ -663,16 +686,22 @@ class Tracker:
             
 
     def azimuthZero(self,starttime,endtime,tle):
-        times = starttime
-        while True:
+        """ Return the second before the azimuth crosses the 0 to 360 point, no matter if the azimuth
+            is increasing or decreasing
+        """
+        times = starttime #set the time variable to the start time
+        while True: #loop indefinitely
+            #if the satellite is less than one now and greater than 359 one second later
             if (tle.getAzimuth(times))<1 and tle.getAzimuth((times+timedelta(seconds=1)))>359:
-                return times
+                return times #return time variable
+            #if the satellite is greater than 359 and less than 1 one second later
             elif tle.getAzimuth(times)>359 and tle.getAzimuth((times+timedelta(seconds=1)))<1:
-                return times
+                return times 
+            #if the time is greater than the end time, the azimuth must not have crossed the point at all
             elif time.mktime(times.timetuple())>time.mktime(endtime.timetuple()):
                 return endtime
-            else:
-                times = times+timedelta(seconds=1)
+            else: #if nothing returned
+                times += timedelta(seconds=1) #increment time variable by one second
     
         
             
@@ -780,9 +809,9 @@ class runSchedule(threading.Thread):
                     self.satelliteName = item.getSatName()
                     self.tle = item.getTLE()
                     self.aosTime = item.getStartTime()
+                    self.losTime = item.getEndTime()
                     self.isAOS=True
                     self.tracker.positionAntenna(self.aosTime,self.tle)
-                    self.losTime = item.getEndTime()
                     while self.continueExecutingFlag==True and time.time()<time.mktime(self.aosTime.timetuple()):
                         time.sleep(1)
                     print('stopped sleeping')
@@ -792,6 +821,7 @@ class runSchedule(threading.Thread):
                     self.isAOS=False
                     self.tracker.trackSatellite2(self.losTime,self.tle)
                     print('moving on to the next satellite')
+            self.isAOS=True
                                 
     
     def getCurrentSatName(self):
@@ -833,8 +863,6 @@ class runSchedule(threading.Thread):
             
         
 class TLEUpdate:
-    
-    
     
     def update(self,urls):
             

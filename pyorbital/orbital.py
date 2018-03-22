@@ -370,7 +370,7 @@ class Orbital(object):
             orbit += 1
         return orbit
 
-    def get_next_passes(self, utc_time, length, lon, lat, alt, tol=0.001, horizon=0):
+    def get_next_passes(self, utc_time, length, lon, lat, alt, horizon,tol=0.001):
         """Calculate passes for the next hours for a given start time and a
         given observer.
 

@@ -10,6 +10,7 @@ import os
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import numpy as np
 
 #from PIL import Image
 #import ImageTk
@@ -103,10 +104,10 @@ class GUI(Frame):
         self.canvasFrame.bind("<Configure>", self.onScheduleFrameConfigure) #method called when the user scrolls
         self.scheduleCanvas.bind('<Enter>', self.bindScheduleCanvas) #https://stackoverflow.com/questions/17355902/python-tkinter-binding-mousewheel-to-scrollbar
         self.scheduleCanvas.bind('<Leave>', self.unbindScheduleCanvas)
-        
+      
         self.figure = Figure(figsize=(4,2))
         self.p = self.figure.add_subplot(111,projection='polar')
-        self.p.plot([180,45],[0,-90])
+        
         self.plotCanvas = FigureCanvasTkAgg(self.figure, master=self)
         self.plotCanvas.get_tk_widget().grid(column=4, row=0, rowspan=1, sticky="nesw")
        
@@ -180,16 +181,27 @@ class GUI(Frame):
             Label(self.canvasFrame).grid()
             self.scheduleWidgetList.append(trackLabelEnd)
             
-    def updatePlot(self,nowx,startx,endx,nowy,starty,endy):
+    def updatePlot(self,tle,startTime,endTime):
         self.p.clear()
-        
+        theta = []
+        r = []
+        time = startTime
+        while time<endTime:
+            theta.append(np.sqrt(tle.getAzimuth(time)**2 + tle.getElevation(time)**2))
+            r.append(np.arctan2(tle.getElevation(time), tle.getAzimuth(time)))
+            time += timedelta(seconds=5)
+        print(r)
+        print(theta)
+       
+        self.p.plot(r,theta)
+        """
         self.plotCanvas.get_tk_widget().grid_forget()
         self.figure = Figure(figsize=(4,2))
         self.p = self.figure.add_subplot(111,projection='polar')
         self.p.plot((nowx,startx,endx),(nowy,starty,endy))
         self.plotCanvas = FigureCanvasTkAgg(self.figure, master=self)
         self.plotCanvas.get_tk_widget().grid(column=4, row=0, rowspan=1, sticky="nesw")
-
+        """
       
         
         

@@ -37,5 +37,5 @@ class MyClass(object):
             return eleTime
         
 calc = MyClass()
-print(calc.calculateTime(302.070950173,68.3697402547,0,0))
+print(calc.calculateTime(0,360,0,0))
     
