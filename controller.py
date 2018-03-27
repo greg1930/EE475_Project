@@ -11,31 +11,19 @@ import threading
 from Queue import Queue
 from datetime import datetime
 import SDR as sdr
+import GSI as gsi
 import random
 
     
 from Tkinter import *
 
-class test(threading.Thread):
-    def __init__(self,q):
-        super(test, self).__init__()
-        self.queue = q
-    def run(self):
-        while True:
-            value = self.queue.get()
-            if value==None:
-                break
-            else:
-                print('running',value)
-                for i in range(0,9):
-                    print('running')
-                    time.sleep(1)
 
 class Controller:
     
     def __init__(self,root):
-        self.externalPrograms = [sdr.Main()]
         self.gui = view.GUI(root,self)
+        self.externalPrograms = [sdr,gsi]
+        self.externalThreads=[]
         self.satelliteList={}
         self.tolerance = 5.00
         self.duration = 12
@@ -43,23 +31,22 @@ class Controller:
         self.updateFlag = True
         self.run=model.runSchedule(None,None)
         self.run.start()
-        """
-        q = Queue()
-        t = test(q)
-        t.start()
-        #threading.Thread(target=self.func, args=(q,)).start()
-        for i in range(1,21):
-            q.queue.clear()
-            q.put(i)
-            time.sleep(1)
-        q.put(None)
-        """
+        self.queueList = []
+       
     
     def createGUI(self):
-        
         self.gui.addWidgets()
         
+    def runExternals(self,root):
+        for item in self.externalPrograms:
+            queue = Queue()
+            self.queueList.append(queue)
+            thread = threading.Thread(target=item.Main(root).update,args=(queue,))
+            thread.start()
+            self.externalThreads.append(thread)
+            #thread.start_new_thread(item.Main,(root,))
 
+    
     def start(self):
         self.updateFlag=True
         tracker=model.Tracker(self.tolerance,self.duration)
@@ -136,10 +123,13 @@ class Controller:
         self.tolerance=tolerance
         self.duration = duration
         model.TLEUpdate().update(urlList)
-        
-    def sendCommand(self,name,endtime):
-        for program in self.externalPrograms:
-            program.update(name,endtime)
+    
+    
+    def sendCommands(self,name,endTime):
+        for queue in self.queueList:
+            queue.put(name)
+            queue.put(endTime)
+    
       
     def updateCountdown(self,run):
         #reader=model.AntennaReader()
@@ -152,9 +142,10 @@ class Controller:
                         #run.getTLE().getElevation(datetime.utcnow()),run.getTLE().getElevation(run.getAOS()),run.getTLE().getElevation(run.getLOS()))
             if run.getIsAOS()==True:
                 self.gui.updateNextSatLabel("%s Will Be Visible In:" %(run.getCurrentSatName()))
+                self.sendCommands(run.getCurrentSatName(),aoslosTime)
+        
             else:
                 self.gui.updateNextSatLabel("%s Will Be Visible For:" %(run.getCurrentSatName()))
-                self.sendCommand(run.getCurrentSatName(),aoslosTime)
             aoslosTime = time.mktime(aoslosTime.timetuple())
             while aoslosTime-time.time()>0 and self.updateFlag==True:
                 self.gui.updateSatAzimuthLabel(round(run.getCurrentAzimuth(),2))
@@ -174,5 +165,6 @@ class Controller:
     
 root=Tk()
 controller = Controller(root)
+controller.runExternals(root)
 controller.createGUI()
 root.mainloop()   
